@@ -1,4 +1,4 @@
-# Stencil Applications on Tenstorrent Wormhole and Blackhole
+# Stencil Computations on Tenstorrent Wormhole and Blackhole
 
 This project aims to study the performance of stencil computation on AI accelerators such as Tenstorrent devices.
 
