@@ -5,10 +5,14 @@
 // 5-point Jacobi solver for the Laplace equation, ported from jacobi_optimised (Grayskull e150) to
 // Blackhole with tt-metal 1f2ae9b5.
 //
-// Usage: ./jacobi X Y ITS CX CY [--no-verify]
+// Usage: ./jacobi X Y ITS CX CY
 //   X, Y    interior grid size, multiples of 32
 //   ITS     number of Jacobi sweeps
 //   CX, CY  cores along the row (x) and column (y) dimension of the grid
+//
+// Every run times three versions of the same sweeps: the single-threaded CPU reference that mirrors
+// the device's bf16 rounding (and checks its result), an fp32 CPU version on CPU_THREADS threads, and
+// the device.
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -19,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <barrier>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -26,6 +31,7 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -41,6 +47,7 @@ constexpr uint32_t BATCH = 32;                                     // batch edge
 constexpr uint32_t WINDOW = BATCH + 2;                             // batch plus a one-point halo
 constexpr uint32_t TILE_BYTES = BATCH * BATCH * sizeof(bfloat16);  // 2 KB
 constexpr uint32_t CB_PAGES = 4;                                   // pages per circular buffer
+constexpr uint32_t CPU_THREADS = 32;                               // threads of golden_optimized
 
 constexpr tt::CBIndex CB_EAST = tt::CBIndex::c_0;
 constexpr tt::CBIndex CB_WEST = tt::CBIndex::c_1;
@@ -55,7 +62,6 @@ constexpr uint32_t HAS_NORTH = 1, HAS_SOUTH = 2, HAS_WEST = 4, HAS_EAST = 8;
 
 struct Config {
     uint32_t x = 0, y = 0, its = 0, cx = 0, cy = 0;
-    bool verify = true;
 };
 
 // Padded grid in DRAM: one halo row above and below the interior, `pad` columns on each side.
@@ -84,10 +90,6 @@ double seconds_since(std::chrono::steady_clock::time_point start) {
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 }
 
-std::string kernel_path(const char* name) {
-    const char* dir = std::getenv("JACOBI_KERNEL_DIR");
-    return std::string(dir != nullptr ? dir : JACOBI_KERNEL_DIR) + "/" + name;
-}
 
 bool parse_uint(const char* text, uint32_t& value) {
     char* end = nullptr;
@@ -100,21 +102,14 @@ bool parse_uint(const char* text, uint32_t& value) {
 }
 
 bool parse_args(int argc, char** argv, Config& cfg) {
-    std::vector<const char*> positional;
-    for (int i = 1; i < argc; ++i) {
-        if (std::string(argv[i]) == "--no-verify") {
-            cfg.verify = false;
-        } else {
-            positional.push_back(argv[i]);
-        }
-    }
+    std::vector<const char*> positional(argv + 1, argv + argc);
     uint32_t* fields[] = {&cfg.x, &cfg.y, &cfg.its, &cfg.cx, &cfg.cy};
     bool ok = positional.size() == 5;
     for (size_t i = 0; ok && i < 5; ++i) {
         ok = parse_uint(positional[i], *fields[i]);
     }
     if (!ok) {
-        fprintf(stderr, "Usage: %s X Y ITS CX CY [--no-verify]\n", argv[0]);
+        fprintf(stderr, "Usage: %s X Y ITS CX CY\n", argv[0]);
         fprintf(stderr, "  X, Y: interior grid size; ITS: sweeps; CX, CY: cores along x (rows) and y (columns)\n");
         return false;
     }
@@ -174,6 +169,67 @@ std::vector<float> golden_jacobi(const std::vector<bfloat16>& init, const GridLa
         std::swap(u, v);
     }
     return u;
+}
+
+// Optimised CPU baseline: the same sweeps in plain fp32 (no bf16 rounding) on `num_threads` threads,
+// each owning a block of interior rows, with a barrier between sweeps. Every thread first touches its
+// own rows so they land in its NUMA node. Returns the seconds spent in the sweeps only, the
+// counterpart of the device's execution time (allocation, initialisation and thread start-up excluded).
+double golden_optimized(const GridLayout& g, uint32_t its, uint32_t num_threads) {
+    const size_t cols = g.cols;
+    std::unique_ptr<float[]> grid_a(new float[g.rows * cols]);  // uninitialised, see first touch above
+    std::unique_ptr<float[]> grid_b(new float[g.rows * cols]);
+    const uint32_t interior = g.rows - 2;
+    num_threads = std::min(num_threads, interior);
+
+    std::barrier sweep_done(num_threads);
+    std::barrier start_stop(num_threads + 1);  // the calling thread joins to time the sweeps
+    auto worker = [&](uint32_t rank) {
+        const auto [first, count] = split(interior, num_threads, rank);
+        // Interior rows are 1 .. X; thread 0 also owns the top halo row, the last one the bottom halo row.
+        const uint32_t r0 = first + 1, r1 = first + 1 + count;
+        const uint32_t init0 = rank == 0 ? 0 : r0;
+        const uint32_t init1 = rank == num_threads - 1 ? g.rows : r1;
+        for (float* grid : {grid_a.get(), grid_b.get()}) {
+            for (uint32_t r = init0; r < init1; ++r) {
+                float* row = grid + r * cols;
+                std::fill(row, row + cols, 0.0f);
+                row[g.pad - 1] = 1.0f;  // same boundary as initial_grid
+                row[cols - g.pad] = 20.0f;
+            }
+        }
+        float* src = grid_a.get();
+        float* dst = grid_b.get();
+        start_stop.arrive_and_wait();
+        for (uint32_t it = 0; it < its; ++it) {
+            for (uint32_t r = r0; r < r1; ++r) {
+                const float* __restrict up = src + (r - 1) * cols;
+                const float* __restrict mid = src + r * cols;
+                const float* __restrict down = src + (r + 1) * cols;
+                float* __restrict out = dst + r * cols;
+                for (size_t c = g.pad; c < cols - g.pad; ++c) {
+                    out[c] = 0.25f * (mid[c + 1] + mid[c - 1] + down[c] + up[c]);
+                }
+            }
+            sweep_done.arrive_and_wait();
+            std::swap(src, dst);
+        }
+        start_stop.arrive_and_wait();
+    };
+
+    std::vector<std::thread> threads;
+    threads.reserve(num_threads);
+    for (uint32_t t = 0; t < num_threads; ++t) {
+        threads.emplace_back(worker, t);
+    }
+    start_stop.arrive_and_wait();
+    const auto start = std::chrono::steady_clock::now();
+    start_stop.arrive_and_wait();
+    const double elapsed = seconds_since(start);
+    for (std::thread& t : threads) {
+        t.join();
+    }
+    return elapsed;
 }
 
 // Compare every point, padding and halo included. The device keeps partial sums in fp32 but can round
@@ -243,7 +299,7 @@ distributed::MeshWorkload build_workload(
 
     const KernelHandle reader = CreateKernel(
         program,
-        kernel_path("dataflow/stream_in.cpp"),
+        OVERRIDE_KERNEL_PREFIX "optimized_axpy_stencil/kernels/dataflow/stream_in.cpp",
         cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -251,7 +307,7 @@ distributed::MeshWorkload build_workload(
             .compile_args = dataflow_ct_args});
     const KernelHandle writer = CreateKernel(
         program,
-        kernel_path("dataflow/stream_out.cpp"),
+        OVERRIDE_KERNEL_PREFIX "optimized_axpy_stencil/kernels/dataflow/stream_out.cpp",
         cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -259,7 +315,7 @@ distributed::MeshWorkload build_workload(
             .compile_args = dataflow_ct_args});
     const KernelHandle compute = CreateKernel(
         program,
-        kernel_path("compute/laplace.cpp"),
+        OVERRIDE_KERNEL_PREFIX "optimized_axpy_stencil/kernels/compute/laplace.cpp",
         cores,
         ComputeConfig{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .fp32_dest_acc_en = true, .math_approx_mode = false});
 
@@ -355,12 +411,16 @@ int main(int argc, char** argv) {
     std::shared_ptr<distributed::MeshBuffer> grid_b = distributed::MeshBuffer::create(grid_config, dram_config, mesh.get());
 
     const std::vector<bfloat16> init = initial_grid(g);
-    std::vector<float> reference;
-    if (cfg.verify) {
-        const auto start = std::chrono::steady_clock::now();
-        reference = golden_jacobi(init, g, cfg.its);
-        printf("Calculated reference version over %u iterations in %.4f secs\n", cfg.its, seconds_since(start));
-    }
+    const auto golden_start = std::chrono::steady_clock::now();
+    const std::vector<float> reference = golden_jacobi(init, g, cfg.its);
+    printf("Calculated reference version over %u iterations in %.4f secs\n", cfg.its, seconds_since(golden_start));
+    const uint32_t cpu_threads = std::min(CPU_THREADS, cfg.x);
+    const double golden_opt_time = golden_optimized(g, cfg.its, cpu_threads);
+    printf(
+        "Calculated optimized fp32 version over %u iterations on %u threads in %.4f secs\n",
+        cfg.its,
+        cpu_threads,
+        golden_opt_time);
 
     // A one-sweep run compiles the kernels, so the timed run below measures execution only.
     {
@@ -388,10 +448,7 @@ int main(int argc, char** argv) {
     const double xfer_off_time = seconds_since(start);
     printf("--- COPIED DATA BACK ---\n");
 
-    bool ok = true;
-    if (cfg.verify) {
-        ok = compare(result, reference, g);
-    }
+    const bool ok = compare(result, reference, g);
     mesh->close();
 
     const double total_time = xfer_on_time + exec_time + xfer_off_time;
