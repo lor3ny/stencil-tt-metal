@@ -1,0 +1,60 @@
+$ /home/lorenzo.piarulli/tt-metal/build_Release/programming_examples/optimized_axpy_stencil 4096 4096 100 11 10
+2026-10-15 07:35:48.299 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-10-15 07:35:48.299 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-10-15 07:35:48.300 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-10-15 07:35:48.300 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-10-15 07:35:48.306 | info     |             UMD | Established firmware bundle version: 19.13.1 (topology_discovery.cpp:576)
+2026-10-15 07:35:48.306 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-10-15 07:35:48.352 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[2] and remote chip ids {} (cluster.cpp:173)
+2026-10-15 07:35:48.353 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-10-15 07:35:48.353 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-15 07:35:48.353 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-10-15 07:35:48.354 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-10-15 07:35:48.436 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+XRT build version: 2.19.194
+Build hash: 7d8151e6ee73c6ec2e99501a58c9c2eca6cc68ce
+Build date: 2025-05-18 05:07:43
+Git branch: 2025.1
+PID: 2053748
+UID: 728800402
+[Thu Oct 15 07:35:48 2026 GMT]
+HOST: wh4-sissa.e4red
+EXE: /home/lorenzo.piarulli/tt-metal/build_Release/programming_examples/optimized_axpy_stencil
+[XRT] ERROR: XILINX_XRT must be set
+[XRT] ERROR: XILINX_XRT must be set
+[XRT] ERROR: XILINX_XRT must be set
+2026-10-15 07:35:48.622 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-10-15 07:35:48.622 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-10-15 07:35:48.622 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:3368)
+2026-10-15 07:35:48.622 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:3376)
+2026-10-15 07:35:48.647 | warning  |           Metal | Failed to create shared memory /tt_device_14749466135260575671_memory: Permission denied (memory_stats_shm.cpp:60)
+Executing over x=11, y=10 cores, there are a total of x=11 y=10 cores available
+Running Jacobi for x=4096, y=4096 over 100 iterations
+DRAM alignment 64 B: 32 padding columns per side, 8320 B per grid row
+Calculated reference version over 100 iterations in 5.3465 secs
+Calculated optimized fp32 version over 100 iterations on 32 threads in 0.0497 secs
+--- LAUNCH ---
+--- COMPLETED RUN ---
+--- COPIED DATA BACK ---
+  mismatch at row 1, column 33: device 0.281250, reference 0.289062
+  mismatch at row 1, column 34: device 0.181641, reference 0.191406
+  mismatch at row 1, column 35: device 0.125977, reference 0.134766
+  mismatch at row 1, column 36: device 0.091797, reference 0.098633
+  mismatch at row 1, column 37: device 0.067871, reference 0.073730
+  mismatch at row 1, column 38: device 0.050781, reference 0.055420
+  mismatch at row 1, column 39: device 0.038086, reference 0.041992
+  mismatch at row 1, column 40: device 0.028442, reference 0.031494
+  mismatch at row 1, column 41: device 0.020996, reference 0.023560
+  mismatch at row 1, column 42: device 0.015381, reference 0.017334
+Error: 16871633 of 17047680 grid points within tolerance (16334988 identical), max abs difference 0.8125
+Run completed, total time 0.3485 sec. 0.0122 sec transfer on, 0.3195 sec execution, 0.0168 sec transfer off
+Total points 1677721600
+Execution GPts: 4.8908
+Total GPts: 4.4841
+2026-10-15 07:35:54.639 | info     |    BuildKernels | JIT cache stats: 11/11 hits (100.0%) [11 cached, 3 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-10-15 07:35:54.639 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-10-15 07:35:54.643 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-10-15 07:35:54.643 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-10-15 07:35:54.934 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-10-15 07:35:54.934 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-10-15 07:35:54.934 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

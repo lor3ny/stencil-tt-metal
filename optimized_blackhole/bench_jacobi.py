@@ -249,11 +249,14 @@ def derived_metrics(r):
     }
 
 
+PLOTTABLE_STATUSES = ("ok", "mismatch")  # mismatch runs still have valid timings
+
+
 def summarise(rows):
-    """Median and min/max over repetitions of each (size, its, cx, cy), successful runs only."""
+    """Median and min/max over repetitions of each (size, its, cx, cy), plottable runs only."""
     groups = {}
     for r in rows:
-        if r["status"] == "ok":
+        if r["status"] in PLOTTABLE_STATUSES:
             groups.setdefault((r["size"], r["its"], r["cx"], r["cy"]), []).append(r)
     summary = []
     for (size, its, cx, cy), rs in sorted(groups.items()):
@@ -469,7 +472,7 @@ def plot_core_scaling(plt, summary, its, path):
 def make_plots(csv_path, layouts, max_grid):
     out_dir = csv_path.parent
     rows = latest_rows(load_csv(csv_path))
-    bad = [r for r in rows if r["status"] != "ok"]
+    bad = [r for r in rows if r["status"] not in PLOTTABLE_STATUSES]
     if bad:
         print(f"{len(bad)} of {len(rows)} runs did not succeed and are left out of the plots:")
         for r in bad:
